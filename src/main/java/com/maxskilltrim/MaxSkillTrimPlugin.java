@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.events.*;
 import net.runelite.api.widgets.*;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -40,12 +41,15 @@ public class MaxSkillTrimPlugin extends Plugin
     @Inject
     private ClientToolbar pluginToolbar;
     public static final File MAXSKILLTRIMS_DIR = new File(RuneLite.RUNELITE_DIR.getPath() + File.separator + "max-skill-trims");
-    private static final int SCRIPTID_STATS_INIT = 393;
+    private static final int SCRIPTID_STATS_INIT = 394;
+    private static final int SCRIPTID_STATS_REFRESH = 393;
+    private static final int WIDGET_CHILD_ID_MASK = 0xFFFF;
     @Inject
     private Client client;
     @Inject
     private ClientThread clientThread;
     private Widget currentWidget;
+    private SkillData lastSkillBuiltTrimFor;
     private final Widget[] maxLevelTrimWidgets = new Widget[SkillData.values().length];
     private final Widget[] maxExperienceTrimWidgets = new Widget[SkillData.values().length];
 
@@ -104,21 +108,29 @@ public class MaxSkillTrimPlugin extends Plugin
 
     @Subscribe
     public void onScriptPreFired(ScriptPreFired event) {
-        if (event.getScriptId() != SCRIPTID_STATS_INIT)	{
-            return;
+        if (event.getScriptId() == SCRIPTID_STATS_INIT || event.getScriptId() == SCRIPTID_STATS_REFRESH) {
+            Widget widget = event.getScriptEvent().getSource();
+            if (widget.getId() == InterfaceID.Stats.UNIVERSE) {
+                currentWidget = null;
+            } else {
+                currentWidget = widget;
+            }
         }
-        currentWidget = event.getScriptEvent().getSource();
     }
 
     @Subscribe
     public void onScriptPostFired(ScriptPostFired event) {
-        if (event.getScriptId() == SCRIPTID_STATS_INIT && currentWidget != null) {
+        if (
+            event.getScriptId() == SCRIPTID_STATS_INIT
+            || event.getScriptId() == SCRIPTID_STATS_REFRESH
+            && currentWidget != null
+        ) {
             buildTrim(currentWidget);
         }
     }
 
     private void buildTrimWidgetContainers() {
-        Widget skillsContainer = client.getWidget(WidgetInfo.SKILLS_CONTAINER);
+        Widget skillsContainer = client.getWidget(InterfaceID.Stats.UNIVERSE);
         if (skillsContainer == null) {
             return;
         }
@@ -135,23 +147,42 @@ public class MaxSkillTrimPlugin extends Plugin
             }
 
             Widget[] children = trim.getParent().getChildren();
-            for (int i = 0; i < children.length; i++) {
-                if (trim == children[i]) {
-                    children[i] = null;
+            if (children != null) {
+                for (int i = 0; i < children.length; i++) {
+                    if (trim == children[i]) {
+                        children[i] = null;
+                    }
                 }
             }
         }
     }
 
+    private int getChildId(int id) {
+        return id & WIDGET_CHILD_ID_MASK;
+    }
+
     private void buildTrim(Widget parent) {
-        int idx = WidgetInfo.TO_CHILD(parent.getId()) - 1;
+        if (parent.getType() != WidgetType.LAYER) {
+            log.error("buildTrim called with non-layer widget");
+            return;
+        }
+
+        int idx = getChildId(parent.getId()) - 1;
         SkillData skill = SkillData.get(idx);
         if (skill == null) {
             return;
         }
 
+        if (skill == lastSkillBuiltTrimFor) {
+            return;
+        }
+        lastSkillBuiltTrimFor = skill;
+
         maxLevelTrimWidgets[idx] = createWidget(parent, skill, maxLevelTrim);
         maxExperienceTrimWidgets[idx] = createWidget(parent, skill, maxExperienceTrim);
+
+        updateTrim(skill, maxLevelTrimWidgets[idx], maxLevelTrim);
+        updateTrim(skill, maxExperienceTrimWidgets[idx], maxExperienceTrim);
     }
 
     private Widget createWidget(Widget parent, SkillData skill, Trim trim) {
@@ -198,11 +229,17 @@ public class MaxSkillTrimPlugin extends Plugin
 
     void updateTrims() {
         for(int i = 0; i < maxLevelTrimWidgets.length; i++) {
-            updateTrim(SkillData.get(i), maxLevelTrimWidgets[i], maxLevelTrim);
+            SkillData skill = SkillData.get(i);
+            if (skill != null) {
+                updateTrim(skill, maxLevelTrimWidgets[i], maxLevelTrim);
+            }
         }
 
         for(int i = 0; i < maxExperienceTrimWidgets.length; i++) {
-            updateTrim(SkillData.get(i), maxExperienceTrimWidgets[i], maxExperienceTrim);
+            SkillData skill = SkillData.get(i);
+            if (skill != null) {
+                updateTrim(skill, maxExperienceTrimWidgets[i], maxExperienceTrim);
+            }
         }
 
     }
